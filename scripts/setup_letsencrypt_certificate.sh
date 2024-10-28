@@ -16,3 +16,5 @@ apt remove certbot -y
 #instalamos el cliente de certbot 
 snap install --classic certbot
 
+#Creamos un alias para el comando certbot
+ln -fs /snap/
