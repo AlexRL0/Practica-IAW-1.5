@@ -4,13 +4,27 @@
 
 **para la instalación vamos a tener que crear la siguiente estructura de directorios y archivos:**
 
-![](imagenes/directorio-1.4.png)
+![](imagenes/directorio-1.5.png)
 
 **Una vez creados los archivos y directorios, procedemos a la instalación de las herramientas.**
 
-## Creación y configuración de un certificado SSL/TLS autofirmado en Apache
+## HTTPS con Let’s Encrypt y Certbot
 
-## 1. Creación del archivo `setup_selfsigned_certificate` para la automatización de la creación del certificado SSL/TLS
+## 1. Creamos un nombre de dominio para nuestro servidor con la web `no-ip`
+
+### Paso 1. Crear el nombre del dominio 
+
+Para crear el nombre de dominio en la página, tenemos que registrarnos y dirigirnos al sitio que muestra la captura y darle a **crear nombre de host**.
+
+![](imagenes/no-ip.png)
+
+Una vez dado al recuadro de crear el nombre, nos sale un asistente para poner el nombre de host que queramos, el dominio que queremos que lleve, la dirección ip de la máquina o pc que queremos que tenga ese nombre de host y el tipo de registro que queremos que lleve, en nuestro caso es el **DNS Host A**
+
+![](imagenes/no-ip2.png)
+
+Hecho esto ya podemos automatizar el proceso de obtener el certificado con Let's Encrypt
+
+## 2. Creación del archivo `setup_letsencrypt_certificate` para la automatización de la creación del certificado SSL/TLS
 
 ### Paso 1. Importamos el archivo de variables y mostramos los comandos que se van ejecutando 
 
@@ -22,79 +36,69 @@ source .env
 set -ex
 ```
 
-### Paso 2. Creamos el certificado autofirmado
+### Paso 2. Instalamos y actualizamos snap
 
 ```
-openssl req \
-  -x509 \
-  -nodes \
-  -days 365 \
-  -newkey rsa:2048 \
-  -keyout /etc/ssl/private/apache-selfsigned.key \
-  -out /etc/ssl/certs/apache-selfsigned.crt \
-  -subj "/C=$OPENSSL_COUNTRY/ST=$OPENSSL_PROVINCE/L=$OPENSSL_LOCALITY/O=$OPENSSL_ORGANIZATION/OU=$OPENSSL_ORGUNIT/CN=$OPENSSL_COMMON_NAME/emailAddress=$OPENSSL_EMAIL"
+snap install core
+snap refresh core
 ```
 
-> [!NOTE]  
-> 
-
-### Paso 3. Clonamos el repositorio de la aplicación en /tmp
+### Paso 3. Eliminamos instalaciones previas de certbot con apt
 
 ```
-git clone https://github.com/josejuansanchez/iaw-practica-lamp.git /tmp/iaw-practica-lamp
+apt remove certbot -y
 ```
 
-### Paso 4. Movemos el código fuente de la aplicación a /var/www/html
+### Paso 4. instalamos el cliente de certbot 
 
 ```
-mv /tmp/iaw-practica-lamp/src/* /var/www/html
+snap install --classic certbot
 ```
 
-> [!NOTE]  
-> Lo movemos a otro sitio ya que lo habíamos descargado en un directorio temporal, que eso significa que a la hora de reiniciar o apagar la máquina, el repositorio desaparece del directorio al ser temporal.
-
-### Paso 5. Configuramos el archivo config.php
+### Paso 5. Solicitamos un certificado a Let's Encrypt
 
 ```
-sed -i "s/database_name_here/$DB_NAME/" /var/www/html/config.php
-sed -i "s/username_here/$DB_USER/" /var/www/html/config.php
-sed -i "s/password_here/$DB_PASSWORD/" /var/www/html/config.php
+certbot --apache -m $LE_EMAIL --agree-tos --no-eff-email -d $LE_DOMAIN --non-interactive
 ```
 
 > [!IMPORTANT]  
-> Este archivo lo modificamos ya que el original tiene unas variables que no tenemos y que si dejamos el archivo tal cual como viene del repositorio pues no funcionaría. Así que, con el comando `sed -i` lo cambiamos con nuestras variables que tenemos en el archivo `.env`.
+> El certificado se lo pedimos así porque si ponemos ese comando en una terminal pide varias cosas y para que sea automatizado le pasamos todas las variables que pide y aparte, le pasamos nosotros dos variables que tenemos que crear en el archivo `.env` indicándole el email y el nombre de dominio creado de la página web `no-ip`.
 
-### Paso 6. Creamos una base de datos de ejemplo
-
-```
-mysql -u root <<< "DROP DATABASE IF EXISTS $DB_NAME"
-mysql -u root <<< "CREATE DATABASE $DB_NAME"
-```
-
-### Paso 7. Creamos un usuario para la base de datos de ejemplo
-
+### Paso 6. Deshabilitamos el host anterior y reiniciamos el servicio de apache
 
 ```
-mysql -u root <<< "DROP USER IF EXISTS '$DB_USER'@'%'"
-mysql -u root <<< "CREATE USER '$DB_USER'@'%' IDENTIFIED BY '$DB_PASSWORD'"
-mysql -u root <<< "GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'%'"
+a2dissite 000-default.conf
 ```
 
-### Paso 8. Configuramos el script de SQL con el nombre de la base de datos
-
 ```
-sed -i "s/lamp_db/$DB_NAME/" /tmp/iaw-practica-lamp/db/database.sql
+systemctl reload apache2
 ```
 
 > [!IMPORTANT]  
-> Este archivo también le tenemos que cambiar una variable ya que la que viene definida no la tenemos y no funcionaría así que con el comando `sed -i` lo cambiamos con nuestras variables que tenemos en el archivo `.env`.
+> Esto lo hacemos ya que al hacer el certificado con cerbot y Let's Encrypt, crea un archivo nuevo de configuración llamado `000-default-le-ssl.conf` que tiene el certificado y el puerto configurado para que rediriga al 443 en vez de al 80.
 
-### Paso 9. Creamos las tablas de la base de datos
+### Paso 7. Habilitamos el host nuevo y reiniciamos el servicio de apache
 
 ```
-mysql -u root < /tmp/iaw-practica-lamp/db/database.sql
+a2ensite 000-default-le-ssl.conf
 ```
 
-### Paso 10. Comprobación de que el despliegue web funciona
+```
+systemctl reload apache2
+```
 
-![](imagenes/DespliegueWeb.png)
+### Paso 8. Hacemos que el host nuevo lea primero los archivos php antes que los de html
+
+> [!IMPORTANT]  
+> Hay que hacer esto ya que al entrar a la web, nos saldrá la página por defecto de apache y no queremos que pase eso ya que tenemos creado un `index.php` para que al entrar, aparezca esa página en vez de la de apache, así que con `nano` modificamos el archivo `000-default-le-ssl.conf` y le añadimos la línea `    DirectoryIndex index.php index.html`. Debe de quedar el archivo como en la siguiente imagen:
+
+![](imagenes/000-default-le-ssl.png)
+
+Una vez hecho esto, ya podemos acceder a la web y comprobar que entra correctamente con https en vez de http, y que si intentamos poner http redirige sólo al https.
+
+![](imagenes/web.png)
+
+Y si miramos el certificado de la página, aparece que está hecho con Let's Encrypt y el nombre del dominio y datos que le pusimos a la hora de crear el directorio.
+
+![](imagenes/Certificado.png)
+
